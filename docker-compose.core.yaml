@@ -1,0 +1,146 @@
+# Core local stack for the working customer journey.
+# Full platform compose remains docker-compose.yaml + docker-compose.services.yaml.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.core.yaml up --build
+#
+# Journey: register -> login -> open USD account -> deposit -> transfer -> statement.
+# Cards spend and loan repay post to the same ledger. Currency is USD only.
+
+name: banking-platform
+
+services:
+  auth-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: auth-service
+    environment:
+      SERVICE_NAME: auth-service
+      POSTGRES_HOST: postgres
+      REDIS_ENABLED: "true"
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  ledger-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: ledger-service
+    environment:
+      SERVICE_NAME: ledger-service
+      POSTGRES_HOST: postgres
+      GRPC_ENABLED: "true"
+      GRPC_PORT: "9090"
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  account-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: account-service
+    environment:
+      SERVICE_NAME: account-service
+      POSTGRES_HOST: postgres
+      LEDGER_GRPC_ADDR: ledger-service:9090
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [ledger-service, postgres]
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: transaction-service
+    environment:
+      SERVICE_NAME: transaction-service
+      POSTGRES_HOST: postgres
+      KAFKA_ENABLED: "true"
+      KAFKA_BROKERS: kafka:9094
+      LEDGER_GRPC_ADDR: ledger-service:9090
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [ledger-service, postgres, kafka]
+
+  statement-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: statement-service
+    environment:
+      SERVICE_NAME: statement-service
+      POSTGRES_HOST: postgres
+      KAFKA_ENABLED: "true"
+      KAFKA_BROKERS: kafka:9094
+      KAFKA_GROUP_ID: statement-service
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [postgres, kafka]
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: notification-service
+    environment:
+      SERVICE_NAME: notification-service
+      POSTGRES_HOST: postgres
+      KAFKA_ENABLED: "true"
+      KAFKA_BROKERS: kafka:9094
+      KAFKA_GROUP_ID: notification-service
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [postgres, kafka]
+
+  card-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: card-service
+    environment:
+      SERVICE_NAME: card-service
+      POSTGRES_HOST: postgres
+      LEDGER_GRPC_ADDR: ledger-service:9090
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [ledger-service, postgres]
+
+  loan-service:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: loan-service
+    environment:
+      SERVICE_NAME: loan-service
+      POSTGRES_HOST: postgres
+      LEDGER_GRPC_ADDR: ledger-service:9090
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on: [ledger-service, postgres]
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: build/service.Dockerfile
+      args:
+        SERVICE: api-gateway
+    environment:
+      SERVICE_NAME: api-gateway
+      POSTGRES_ENABLED: "false"
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    ports:
+      - "8080:8080"
+    depends_on: [auth-service, account-service, transaction-service, card-service, loan-service]
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    depends_on: [api-gateway]
